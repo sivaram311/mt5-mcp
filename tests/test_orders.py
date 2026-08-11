@@ -238,6 +238,22 @@ def test_modify_order_dry_run_never_calls_order_send(connector, audit):
     assert connector.raw.order_send_calls == []
 
 
+def test_modify_order_expiration_raises_unsupported_rather_than_silently_ignored(connector, audit):
+    """Found during review: expiration used to be accepted, recorded in the
+    audit log, and then silently never applied to the real MT5 request —
+    contradicting the tool's own docstring. It must now fail loudly."""
+    connector.raw.pending_orders[42] = _FakeOrder(ticket=42)
+
+    with pytest.raises(OrderError) as excinfo:
+        modify_order(connector, audit, ticket=42, expiration="2026-12-31T00:00:00Z")
+    assert excinfo.value.error_code == "unsupported_parameter"
+
+    rows = audit.query(action="modify_order")
+    assert len(rows) == 1
+    assert rows[0]["success"] is False
+    assert rows[0]["error_code"] == "unsupported_parameter"
+
+
 def test_modify_order_kill_switch_does_not_block(connector, audit, tmp_path, monkeypatch):
     switch = tmp_path / "KILL"
     switch.write_text("stop")

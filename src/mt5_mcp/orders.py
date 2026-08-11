@@ -261,6 +261,26 @@ def modify_order(
     ok, fail = _audited(audit, "modify_order", None, dry_run, request)
 
     try:
+        if expiration is not None:
+            # Found during review: this parameter was accepted and recorded
+            # in the audit log, but never actually applied to the real MT5
+            # request — the docstring claimed expiration modification
+            # worked while the code silently dropped it. Rather than fix
+            # that gap silently (MT5's expiration semantics need dedicated
+            # handling: ORDER_TIME_SPECIFIED vs ORDER_TIME_SPECIFIED_DAY
+            # selection, timestamp format, none of which is tested here
+            # yet), fail loudly and explicitly instead of accepting and
+            # ignoring — matches the project's established pattern for
+            # out-of-scope parameters (see order_types.py's stop_limit/
+            # trailing_stop handling).
+            raise OrderError(
+                "unsupported_parameter",
+                "expiration is not implemented yet — MT5's expiration semantics "
+                "(ORDER_TIME_SPECIFIED vs ORDER_TIME_SPECIFIED_DAY, timestamp format) need "
+                "dedicated handling not yet built. Omit expiration; modify price/stop_loss/"
+                "take_profit/volume only.",
+            )
+
         mt5 = connector.raw
         orders = mt5.orders_get(ticket=ticket)
         if not orders:

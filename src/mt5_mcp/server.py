@@ -261,6 +261,10 @@ def place_order(
     kill-switch and the configured max lot size / max open positions —
     this is the only order/position tool the kill-switch blocks, since
     it's the only one that can create new market exposure.
+
+    `client_order_id` is recorded in the audit log for traceability but
+    does not yet provide request deduplication/idempotency — a retried
+    call with the same client_order_id will place a second real order.
     """
     return orders.place_order(
         _get_connector(), _get_audit_log(), symbol, order_type, side, volume,
@@ -279,7 +283,7 @@ def modify_order(
     volume: float | None = None,
     expiration: str | None = None,
 ) -> dict:
-    """Modifies a pending order's price/SL/TP/volume/expiration. Dry-run by default; not kill-switch-gated (risk-neutral/reducing — see orders.py)."""
+    """Modifies a pending order's price/SL/TP/volume. Dry-run by default; not kill-switch-gated (risk-neutral/reducing — see orders.py). `expiration` is accepted for future use but not yet implemented — passing it raises unsupported_parameter rather than silently ignoring it."""
     return orders.modify_order(
         _get_connector(), _get_audit_log(), ticket,
         price=price, stop_loss=stop_loss, take_profit=take_profit, volume=volume, expiration=expiration,

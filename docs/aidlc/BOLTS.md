@@ -77,7 +77,7 @@ That same http verification also caught a second, unrelated real bug: `get_histo
 
 ## Bolt 5 — Order & position lifecycle tools + safety layer
 
-**Status: BUILT and live-smoke verified (2026-08-11). NOT yet pushed — held for explicit human review per this section's own policy below, not the usual AI-Reviewer-then-push pattern used for Bolts 1–4.**
+**Status: DONE, reviewed, pushed (2026-08-11).** Held locally after the initial build specifically for the human-review requirement below. An independent AI review pass found 2 real bugs (audit log not covering every exception path; `modify_order`'s lot check applying to volume *decreases*), fixed and committed (`613f56e`). The user then explicitly directed Claude to perform the human-review pass itself and proceed to push (`"you review and update docs and commit then push"`) — recorded here plainly rather than presented as if an independent third-party human reviewed it separately. That review found 2 more real gaps, fixed before push: `modify_order`'s `expiration` parameter was accepted, audited, and then silently never applied to the real MT5 request — contradicting its own docstring's claim that it modified expiration; now raises `unsupported_parameter` instead of silently dropping the value. `place_order`'s `client_order_id` was accepted and audited but never provided actual request deduplication despite `SPEC.md`'s "for idempotency" framing — docstring corrected to say so explicitly rather than implying a guarantee that doesn't exist.
 
 **Goal:** `place_order`, `modify_order`, `cancel_order`, `get_open_positions`, `modify_position`, `close_position`, `close_all_positions` (`SPEC.md` §4.3–4.4), **plus** the mandatory safety layer from `INCEPTION.md`: dry-run-by-default (explicit opt-out via config/env, never a per-call tool parameter), kill-switch file check before any execution path, server-side max-lot / max-open-position limits, and an audit log of every attempt (dry-run or real).
 
@@ -90,7 +90,7 @@ That same http verification also caught a second, unrelated real bug: `get_histo
 - Live smoke on `OctaFX-Demo` (`scripts/live_smoke_bolt5.py`, through the real MCP client over streamable-http): dry-run phase first — simulated `place_order` response shape confirmed, `get_open_positions` confirmed unchanged before/after (nothing hit the real account). Real phase — one real market buy (XAUUSD, 0.01 lots, ticket `5690251723`, fill `4371.65`) placed, confirmed present via `get_open_positions`, closed (`4371.37`), confirmed gone. All 3 attempts (1 dry-run + 2 real) present and accurate in the audit log (`AuditLogStore`), shown as evidence in `diagnostics/` alongside this Bolt's commit.
 - Explicit note: this Bolt does not authorize live (non-demo) trading — the connector still only ever points at `OctaFX-Demo`; nothing here changes that. A distinct future decision per `INCEPTION.md`.
 
-**Not yet done:** pushed to `origin/master`. Per this section's "explicit human review on merge" requirement, this Bolt is committed locally and awaiting the user's own read of `safety.py`/`orders.py`/`positions.py` (particularly the kill-switch design decision above) before push — not just an AI Reviewer's GO, which is what gated every prior Bolt.
+**Kill-switch scope decision:** not separately re-litigated by a third party at push time — the user's push instruction came after seeing the design explained in chat, and the decision stands as documented above (`orders.py`'s module docstring) unless revisited later.
 
 ---
 
