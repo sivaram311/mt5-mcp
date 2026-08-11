@@ -73,10 +73,18 @@ class SubscriptionManager:
         connector: MT5Connector,
         store: StreamLogStore,
         poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        unsubscribe_join_timeout: float | None = None,
     ) -> None:
         self._connector = connector
         self._store = store
         self._poll_interval = poll_interval
+        # How long unsubscribe() waits for a polling thread to actually stop
+        # before giving up on it (see unsubscribe()'s is_alive() check).
+        # Configurable mainly so tests can exercise that "still alive after
+        # the timeout" path without a real multi-second wait.
+        self._unsubscribe_join_timeout = (
+            unsubscribe_join_timeout if unsubscribe_join_timeout is not None else poll_interval + 2.0
+        )
         self._lock = threading.Lock()
         self._mt5_call_lock = threading.Lock()
         self._subscriptions: dict[str, _Subscription] = {}
@@ -127,14 +135,23 @@ class SubscriptionManager:
         for sub in subs_to_stop:
             sub.stop_event.set()
         for sub in subs_to_stop:
-            sub.thread.join(timeout=self._poll_interval + 2.0)
+            sub.thread.join(timeout=self._unsubscribe_join_timeout)
+
+        # A thread that's still alive after the join timeout genuinely
+        # didn't stop (e.g. a blocked MT5 call) — reporting it as stopped
+        # anyway would be a false signal to the caller, and popping its
+        # entry here would let a *new* subscribe() reuse machinery while
+        # the old thread might still be mid-poll. Leave it registered so
+        # it stays visible via active_subscriptions() and a later
+        # unsubscribe() call can be retried.
+        actually_stopped = [sid for sid, sub in zip(matches, subs_to_stop) if not sub.thread.is_alive()]
 
         with self._lock:
-            for sid in matches:
+            for sid in actually_stopped:
                 self._subscriptions.pop(sid, None)
                 self._sequence_counters.pop(sid, None)
 
-        return matches
+        return actually_stopped
 
     def query_log(
         self,

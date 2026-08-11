@@ -167,6 +167,35 @@ def test_duplicate_ticks_are_not_rewritten(manager):
     assert len(rows) == 1
 
 
+def test_unsubscribe_does_not_report_stopped_if_thread_still_alive(tmp_path):
+    """Regression test: unsubscribe() must not claim success for a
+    subscription whose poll thread is genuinely still running (e.g. blocked
+    inside an MT5 call) just because stop_event was set and join() timed
+    out. A stuck thread stays registered rather than being silently
+    dropped, so a caller can tell the difference between "confirmed
+    stopped" and "asked to stop, still waiting"."""
+
+    class _BlockingMT5(_FakeMT5):
+        def symbol_info_tick(self, symbol):
+            time.sleep(1.0)  # ignores stop_event entirely, simulating a stuck MT5 call
+            return super().symbol_info_tick(symbol)
+
+    connector = MT5Connector(mt5_module=_BlockingMT5())
+    connector.connect()
+    store = StreamLogStore(tmp_path / "blocking.db")
+    mgr = SubscriptionManager(
+        connector, store, poll_interval=POLL_INTERVAL, unsubscribe_join_timeout=0.05
+    )
+
+    sub_id = mgr.subscribe("XAUUSD", ["tick"])
+    time.sleep(POLL_INTERVAL)  # let the poll loop actually enter the blocking call
+
+    stopped = mgr.unsubscribe(subscription_id=sub_id)
+
+    assert stopped == []
+    assert sub_id in [s["subscription_id"] for s in mgr.active_subscriptions()]
+
+
 def test_poll_error_does_not_kill_subscription(manager):
     mgr, store = manager
     fake = mgr._connector.raw
