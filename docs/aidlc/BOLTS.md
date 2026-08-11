@@ -20,9 +20,26 @@ Evidence expectations: unit tests (mocked `MetaTrader5` module) for all logic; l
 
 ## Bolt 2 — MT5 connector wrapper
 
+**Status: DONE (2026-08-11).**
+
 **Goal:** A thin wrapper module around the `MetaTrader5` package: `initialize()`/`shutdown()`, terminal/account info, connection-state checks. Mirrors the pattern already proven working in `E:\Source\mt5_xauusd_price.py` this session.
 
-**Acceptance:** Unit tests mock the `MetaTrader5` module (init success/failure, disconnected state); one documented live smoke against `OctaFX-Demo` confirming real `initialize()` + account info.
+**Acceptance: met.** `src/mt5_mcp/connector.py`: `MT5Connector` class (`connect()`/`disconnect()`/`is_connected()`/`terminal_info()`/`account_info()`, usable as a context manager), `MT5ConnectionError`, `TerminalInfo`/`AccountInfo` dataclasses. `mt5_module` is dependency-injected (defaults to the real `MetaTrader5` package, swappable for a fake in tests) so unit tests never need a live Windows terminal.
+
+`tests/test_connector.py` (11 unit tests, all against a `_FakeMT5` stand-in): init success passes `path` kwarg correctly, init without a path omits the kwarg, init failure raises `MT5ConnectionError` carrying the real `mt5.last_error()` tuple, calling `terminal_info()`/`account_info()` before `connect()` raises "Not connected", `disconnect()` only calls `shutdown()` if actually connected, `terminal_info()`/`account_info()` field mapping, `account_info()` returns `None` when the terminal is connected but not logged into a trading account (distinct from a connection failure), `terminal_info()` returning `None` from the underlying package raises with the MT5 error attached, and the context-manager form connects on enter / disconnects on exit. 17/17 tests pass repo-wide (5 envelope + 11 connector + 1 server integration).
+
+`scripts/live_smoke_bolt2.py` — documented, repeatable, not run in CI (needs a live Windows terminal). Real run against `OctaFX-Demo` (2026-08-11):
+
+```
+Terminal: Octa Markets MetaTrader 5
+Connected: True
+Trade allowed: True
+Account: 213878432 (OctaFX-Demo)
+Balance: 100.0 USD
+SUCCESS: MT5Connector connected and returned real terminal/account info.
+```
+
+No MCP tool exposes this yet — `MT5Connector` is an internal module only, consumed starting Bolt 3 (matches the `cineforge` precedent of a Bolt 2 client wrapper landing before Bolt 3's user-facing surface).
 
 ---
 
