@@ -38,11 +38,29 @@ class AccountInfo:
     currency: str
 
 
-class MT5Connector:
-    """Owns one MetaTrader5 terminal connection: connect/disconnect + basic info queries."""
+DEFAULT_INIT_TIMEOUT_MS = 10_000
 
-    def __init__(self, path: str | None = None, mt5_module: ModuleType | Any | None = None) -> None:
+
+class MT5Connector:
+    """Owns one MetaTrader5 terminal connection: connect/disconnect + basic info queries.
+
+    Without an explicit `path` (or `MT5_PATH` env var), `initialize()` falls back to
+    MetaTrader5's own terminal auto-discovery, which has been observed on this machine
+    to hang indefinitely (not just slowly) rather than fail fast when it can't locate a
+    terminal — see docs/aidlc/BOLTS.md Bolt 3 for the full incident writeup. Always set
+    MT5_PATH explicitly in real deployments; `timeout_ms` only bounds the documented
+    IPC handshake once a terminal is actually found, it does not bound that discovery
+    hang.
+    """
+
+    def __init__(
+        self,
+        path: str | None = None,
+        mt5_module: ModuleType | Any | None = None,
+        timeout_ms: int = DEFAULT_INIT_TIMEOUT_MS,
+    ) -> None:
         self._path = path or os.getenv("MT5_PATH")
+        self._timeout_ms = timeout_ms
         if mt5_module is None:
             import MetaTrader5 as mt5_module  # imported lazily: package is Windows-only
 
@@ -50,7 +68,9 @@ class MT5Connector:
         self._connected = False
 
     def connect(self) -> None:
-        kwargs = {"path": self._path} if self._path else {}
+        kwargs: dict[str, Any] = {"timeout": self._timeout_ms}
+        if self._path:
+            kwargs["path"] = self._path
         if not self._mt5.initialize(**kwargs):
             raise MT5ConnectionError(
                 "MetaTrader5.initialize() failed",
@@ -72,6 +92,17 @@ class MT5Connector:
         if info is None:
             raise MT5ConnectionError("terminal_info() returned None", mt5_error=self._mt5.last_error())
         return TerminalInfo(name=info.name, connected=info.connected, trade_allowed=info.trade_allowed)
+
+    @property
+    def raw(self) -> Any:
+        """Escape hatch to the underlying MetaTrader5 module (or injected fake) for
+        APIs not wrapped by this class yet (rates, symbol info, orders, ...).
+        Requires an active connection, same as the other query methods."""
+        self._require_connected()
+        return self._mt5
+
+    def last_error(self) -> tuple[int, str]:
+        return self._mt5.last_error()
 
     def account_info(self) -> AccountInfo | None:
         """Returns None if the terminal is connected but not logged into a trading account."""

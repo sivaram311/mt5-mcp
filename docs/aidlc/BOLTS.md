@@ -45,9 +45,17 @@ No MCP tool exposes this yet — `MT5Connector` is an internal module only, cons
 
 ## Bolt 3 — Market data tools
 
+**Status: DONE (2026-08-11), but changed the server's default transport along the way — see below. Not committed to `master` yet, pending review.**
+
 **Goal:** `get_historical_ohlcv` and `get_symbol_info` as real MCP tools (`SPEC.md` §4.1), wired through the Bolt 2 connector. All filter parameters from the spec (`from_date`/`to_date`, `from_bar`/`to_bar`, `limit`, `include_volume`, `include_spread`, `session_filter`, `price_type`, `only_completed_bars`) implemented or explicitly stubbed with a documented reason if MT5's API can't support one directly (e.g. `session_filter` may need to be computed client-side from UTC time, not a native MT5 filter).
 
-**Acceptance:** Unit tests cover the candle/symbol-info data model mapping (`SPEC.md` §5) and filter composition; live smoke pulls real XAUUSD OHLCV from `OctaFX-Demo`.
+**Acceptance: met, after a transport pivot.** Unit tests: `tests/test_market_data.py` (25 tests) cover the candle/symbol-info data model mapping and every filter path (date range, bar range, limit-default, include_volume/include_spread toggles, only_completed_bars, session_filter, unsupported `price_type` explicitly rejected with a documented reason per the Goal above, invalid symbol, empty-data). 39/39 tests pass repo-wide.
+
+**Live smoke: real, but not over stdio.** The first live-smoke attempt over `stdio` (the transport `INCEPTION.md` originally decided on) hung indefinitely on any real `MetaTrader5` call — reproduced reliably, root cause never fully identified despite extensive isolation (env vars, `CREATE_NO_WINDOW`, thread offload, Windows Job Objects, Python 3.12 vs 3.14 all ruled out — see `diagnostics/FINDINGS.md`). **Fix: switched the default transport to `streamable-http`** (`MT5_MCP_TRANSPORT` env var, default `streamable-http`; `stdio` still fully supported, just no longer default; bound to `127.0.0.1:3403`, reserved in `E:\MyAgent\workflow\ports\REGISTRY.md`). `diagnostics/live_smoke_http.py`: 3/3 clean runs, real XAUUSD `get_symbol_info` + `get_historical_ohlcv` data returned through an actual MCP client over HTTP, no hang.
+
+That same http verification also caught a second, unrelated real bug: `get_historical_ohlcv`'s declared return type (`list[dict]`) didn't match what `_as_envelope` actually returns at runtime (a `dict` envelope) — invisible to the unit tests (which call the inner function directly, bypassing FastMCP's schema layer) but a hard failure through any real MCP client. Fixed in `server.py`'s `_as_envelope` (explicit `__signature__` override) with a regression test (`test_server.py::test_envelope_wrapped_tools_have_no_mismatched_output_schema`). Full writeup: `diagnostics/FINDINGS.md`.
+
+**INCEPTION.md's transport decision needs a follow-up edit** (deploy topology / tech stack tables still say "stdio only, no port") — not done yet as part of this Bolt, flagged for whoever reviews this before it's committed.
 
 ---
 

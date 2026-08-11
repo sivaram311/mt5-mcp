@@ -55,16 +55,33 @@ def test_connect_success_passes_path():
     connector.connect()
 
     assert connector.is_connected() is True
-    assert fake.initialize_calls == [{"path": r"E:\ProgramFiles\MT5\terminal64.exe"}]
+    assert fake.initialize_calls == [
+        {"path": r"E:\ProgramFiles\MT5\terminal64.exe", "timeout": 10_000}
+    ]
 
 
-def test_connect_without_path_omits_kwarg():
+def test_connect_without_path_omits_path_kwarg_but_still_passes_timeout(monkeypatch):
+    # MT5_PATH must be genuinely absent here, regardless of what other test
+    # modules in the same pytest session may have done (e.g. test_server.py
+    # imports mt5_mcp.server, whose module-level load_dotenv() picks up the
+    # real repo .env and sets MT5_PATH process-wide otherwise).
+    monkeypatch.delenv("MT5_PATH", raising=False)
     fake = _FakeMT5()
     connector = MT5Connector(mt5_module=fake)
 
     connector.connect()
 
-    assert fake.initialize_calls == [{}]
+    assert fake.initialize_calls == [{"timeout": 10_000}]
+
+
+def test_connect_custom_timeout_passed_through(monkeypatch):
+    monkeypatch.delenv("MT5_PATH", raising=False)
+    fake = _FakeMT5()
+    connector = MT5Connector(mt5_module=fake, timeout_ms=2_000)
+
+    connector.connect()
+
+    assert fake.initialize_calls == [{"timeout": 2_000}]
 
 
 def test_connect_failure_raises_with_mt5_error():
