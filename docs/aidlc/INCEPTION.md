@@ -128,6 +128,12 @@ Researched first: CSS (`E:\MyAgent\workflow\css\`) has no headless/machine-to-ma
 
 **Decision (explicit, user-directed, 2026-08-11):** ship with **no auth gate for now**; full CSS integration is planned for later, not abandoned. Recorded in `workflow/css/CLIENT-REGISTRY.md` as `waived-no-auth` (a status distinct from the existing `waived-public-read` apps, because this is not a read-only surface). Bolt 5's dry-run architecture is the load-bearing mitigation, not a substitute for the decision: `MT5_MCP_DRY_RUN` is a server-side env var, so an unauthenticated remote caller cannot flip it and cannot place a real order through this endpoint. What an unauthenticated caller *can* do today: read real market data, read real open-position state (tickets/volumes/P&L), and receive realistic simulated fills. That is the accepted, explicitly-chosen risk until CSS lands — not an oversight.
 
+### 2026-08-11, same day, follow-up — the load-bearing mitigation was explicitly withdrawn
+
+A few minutes later the user asked to enable real order placement (`MT5_MCP_DRY_RUN=false`) on this same public, no-auth endpoint. Flagged directly before acting: this specifically undoes the mitigation the paragraph above relies on. The user's explicit answer, given that framing: enable it as-is, public and no-auth, real orders included — not deferred, not misunderstood.
+
+**Current state as of 2026-08-11 20:20 (operational, not a code change — `.env` is gitignored, not committed):** `MT5_MCP_DRY_RUN=false`. An unauthenticated caller can now place/modify/cancel/close a real order on the connected account (currently `OctaFX-Demo`, a demo account — not a live-money account, which stays a separate undecided gate per the "Live (non-demo) account use" bullet above). Blast radius is bounded by `MT5_MCP_MAX_LOT_SIZE`/`MT5_MCP_MAX_OPEN_POSITIONS` (unaffected by this toggle, still enforced) and the kill-switch (`MT5_MCP_KILL_SWITCH_PATH` — create that file to immediately block `place_order`). This is a live, moment-in-time operational value, not a permanent decision recorded in code — check `E:\MyAgent\workflow\ports\REGISTRY.md`'s `:3403` row for the actual current value before assuming this doc is still accurate.
+
 ---
 
 ## Secrets handling
