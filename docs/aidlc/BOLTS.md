@@ -77,14 +77,20 @@ That same http verification also caught a second, unrelated real bug: `get_histo
 
 ## Bolt 5 — Order & position lifecycle tools + safety layer
 
+**Status: BUILT and live-smoke verified (2026-08-11). NOT yet pushed — held for explicit human review per this section's own policy below, not the usual AI-Reviewer-then-push pattern used for Bolts 1–4.**
+
 **Goal:** `place_order`, `modify_order`, `cancel_order`, `get_open_positions`, `modify_position`, `close_position`, `close_all_positions` (`SPEC.md` §4.3–4.4), **plus** the mandatory safety layer from `INCEPTION.md`: dry-run-by-default (explicit opt-out via config/env, never a per-call tool parameter), kill-switch file check before any execution path, server-side max-lot / max-open-position limits, and an audit log of every attempt (dry-run or real).
 
 **This is the highest-risk Bolt in the backlog.** Per `INCEPTION.md`'s safety-layer section, changes here always require explicit human review on merge, regardless of what's unlocked elsewhere.
 
-**Acceptance:**
-- Unit tests cover: dry-run path never calls the real MT5 execution API (mock asserts zero calls to `order_send`/`order_close` when dry-run is on); kill-switch file present blocks execution even with dry-run off; risk-limit rejection paths (over max lots, over max open positions); order-type parameter mapping for at least market/limit/stop (`SPEC.md`'s "broker-specific variants" support checked against Octa Markets' actual `ORDER_TYPE_*` support, not assumed).
-- Live smoke on `OctaFX-Demo` **only**, dry-run mode first (confirms simulated response shape, confirms nothing hit the real account), then one real demo-account market order placed and closed end-to-end with the audit log entries shown as evidence.
-- Explicit note in the evidence: this Bolt does not authorize live (non-demo) trading — that stays a distinct future decision per `INCEPTION.md`.
+**Design decision made during this Bolt, flagged for the human reviewer specifically (`src/mt5_mcp/orders.py` module docstring has the full reasoning):** the kill-switch and lot/open-position limits gate **only `place_order`** — the sole action here that can create new market exposure. `modify_order`, `cancel_order`, `modify_position`, `close_position`, `close_all_positions` are never blocked by the kill-switch, on the reasoning that a kill-switch meant to "stop trading now" must not also trap an operator inside an existing position by blocking the actions that reduce or cancel it. `modify_order`'s `volume` parameter, if increased, is still checked against the lot-size limit (that path does increase exposure) but is not kill-switch-gated. **This is a judgment call, not an obviously-correct default — the human reviewer should explicitly agree or push back on it before this merges.**
+
+**Acceptance: met.**
+- 84 new unit tests across `test_safety.py` (28), `test_order_types.py` (15), `test_audit_log.py` (8), `test_orders.py` (19), `test_positions.py` (18) — repo total now 155 (schema regression test extended to all 7 new tools). Covers: dry-run never calls `order_send`/`order_close` (mock asserts zero calls); kill-switch blocks `place_order` even with dry-run off, and is proven to *not* block `modify_order`/`cancel_order`/`modify_position`/`close_position`; risk-limit rejections (over max lot, over max open positions, exactly-at-limit boundary); order-type mapping for market/limit/stop (buy+sell), with `stop_limit`/`trailing_stop` explicitly rejected with a documented reason (different request shape / not a pending-order concept in MT5, not silently unsupported); filling-mode resolution checked against the real symbol's advertised bitmask, not assumed.
+- Live smoke on `OctaFX-Demo` (`scripts/live_smoke_bolt5.py`, through the real MCP client over streamable-http): dry-run phase first — simulated `place_order` response shape confirmed, `get_open_positions` confirmed unchanged before/after (nothing hit the real account). Real phase — one real market buy (XAUUSD, 0.01 lots, ticket `5690251723`, fill `4371.65`) placed, confirmed present via `get_open_positions`, closed (`4371.37`), confirmed gone. All 3 attempts (1 dry-run + 2 real) present and accurate in the audit log (`AuditLogStore`), shown as evidence in `diagnostics/` alongside this Bolt's commit.
+- Explicit note: this Bolt does not authorize live (non-demo) trading — the connector still only ever points at `OctaFX-Demo`; nothing here changes that. A distinct future decision per `INCEPTION.md`.
+
+**Not yet done:** pushed to `origin/master`. Per this section's "explicit human review on merge" requirement, this Bolt is committed locally and awaiting the user's own read of `safety.py`/`orders.py`/`positions.py` (particularly the kill-switch design decision above) before push — not just an AI Reviewer's GO, which is what gated every prior Bolt.
 
 ---
 

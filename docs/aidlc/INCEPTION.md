@@ -154,7 +154,8 @@ Nothing is deployed to F: or G: during Inception. `:3403` is currently only ever
 | SQLite under concurrent access | Fine for a single local server process; would need a real decision (WAL mode tuning, or a move to Postgres per this machine's schema-per-env rule) if ever run multi-process. |
 | Demo vs live account | Current verified connection is `OctaFX-Demo`. Nothing in this charter authorizes pointing MT5-MCP at a live account — that's a distinct future decision, not implied by finishing Construction. |
 | MT5 Python package platform lock-in | The `MetaTrader5` package is Windows-only (wraps the native terminal's IPC) — fine here since this machine is Windows, but worth noting if this ever needs to run elsewhere. |
-| Broker-specific order type support | `SPEC.md` §4.3 lists broker-specific variants as best-effort ("if supported by the backend") — Octa Markets' actual supported set needs to be checked against MT5's `ORDER_TYPE_*` constants during Bolt 5, not assumed. |
+| Broker-specific order type support | Resolved in Bolt 5: market/limit/stop (buy+sell) implemented, filling mode resolved per-symbol from OctaFX's actually-advertised bitmask (not assumed). `stop_limit`/`trailing_stop` explicitly out of scope — different request shape / not a native MT5 pending-order concept — future work, not silently dropped. |
+| Kill-switch scope (Bolt 5 design decision) | Kill-switch and lot/open-position limits gate `place_order` only, not `modify_order`/`cancel_order`/`modify_position`/`close_position`/`close_all_positions` — a kill-switch must not trap an operator inside an existing position. Flagged explicitly for human review before Bolt 5 merges (see `BOLTS.md`), not silently decided. |
 
 ---
 

@@ -9,7 +9,10 @@ dist/
 
 .env
 
-# Future Bolt 4 stream-log store
+# Bolt 4 stream-log store / Bolt 5 audit log
 *.db
 *.sqlite
 *.sqlite3
+
+# Bolt 5 kill-switch file (never meant to be committed — its presence is the signal)
+MT5_MCP_KILL_SWITCH

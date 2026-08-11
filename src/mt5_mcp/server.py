@@ -29,9 +29,15 @@ from mcp.server.fastmcp import FastMCP
 
 from mt5_mcp import __version__
 from mt5_mcp import market_data
+from mt5_mcp import orders
+from mt5_mcp import positions
+from mt5_mcp.audit_log import AuditLogStore
 from mt5_mcp.connector import MT5Connector, MT5ConnectionError
 from mt5_mcp.envelope import err, ok
 from mt5_mcp.market_data import MarketDataError
+from mt5_mcp.orders import OrderError
+from mt5_mcp.positions import PositionError
+from mt5_mcp.safety import SafetyError
 from mt5_mcp.stream_log import StreamLogStore
 from mt5_mcp.streaming import StreamingError, SubscriptionManager
 
@@ -59,9 +65,14 @@ STREAM_LOG_DB_PATH = os.getenv(
     "MT5_MCP_STREAM_LOG_DB",
     str(Path(__file__).resolve().parents[2] / "mt5_mcp_stream_log.db"),
 )
+AUDIT_LOG_DB_PATH = os.getenv(
+    "MT5_MCP_AUDIT_LOG_DB",
+    str(Path(__file__).resolve().parents[2] / "mt5_mcp_audit_log.db"),
+)
 
 _connector: MT5Connector | None = None
 _subscription_manager: SubscriptionManager | None = None
+_audit_log: AuditLogStore | None = None
 
 
 def _get_connector() -> MT5Connector:
@@ -88,6 +99,13 @@ def _get_subscription_manager() -> SubscriptionManager:
         store = StreamLogStore(STREAM_LOG_DB_PATH)
         _subscription_manager = SubscriptionManager(_get_connector(), store)
     return _subscription_manager
+
+
+def _get_audit_log() -> AuditLogStore:
+    global _audit_log
+    if _audit_log is None:
+        _audit_log = AuditLogStore(AUDIT_LOG_DB_PATH)
+    return _audit_log
 
 
 def _as_envelope(fn: Callable[..., Any]) -> Callable[..., dict]:
@@ -117,6 +135,12 @@ def _as_envelope(fn: Callable[..., Any]) -> Callable[..., dict]:
         except MarketDataError as exc:
             return err(exc.error_code, str(exc), retryable=exc.retryable)
         except StreamingError as exc:
+            return err(exc.error_code, str(exc), retryable=exc.retryable)
+        except OrderError as exc:
+            return err(exc.error_code, str(exc), retryable=exc.retryable)
+        except PositionError as exc:
+            return err(exc.error_code, str(exc), retryable=exc.retryable)
+        except SafetyError as exc:
             return err(exc.error_code, str(exc), retryable=exc.retryable)
         except MT5ConnectionError as exc:
             return err("connection_error", str(exc), retryable=True)
@@ -213,6 +237,92 @@ def get_stream_log(
     return _get_subscription_manager().query_log(
         symbol, from_time=from_time, to_time=to_time, data_type=data_type, limit=limit
     )
+
+
+@mcp.tool()
+@_as_envelope
+def place_order(
+    symbol: str,
+    order_type: str,
+    side: str,
+    volume: float,
+    price: float | None = None,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    comment: str | None = None,
+    magic_number: int | None = None,
+    deviation: int = 20,
+    client_order_id: str | None = None,
+) -> dict:
+    """Places a new order (market/limit/stop; buy/sell). See docs/aidlc/SPEC.md sec 4.3.
+
+    Defaults to dry-run (MT5_MCP_DRY_RUN env var, never a tool parameter
+    — see docs/aidlc/INCEPTION.md "Safety layer"). Gated by the
+    kill-switch and the configured max lot size / max open positions —
+    this is the only order/position tool the kill-switch blocks, since
+    it's the only one that can create new market exposure.
+    """
+    return orders.place_order(
+        _get_connector(), _get_audit_log(), symbol, order_type, side, volume,
+        price=price, stop_loss=stop_loss, take_profit=take_profit, comment=comment,
+        magic_number=magic_number, deviation=deviation, client_order_id=client_order_id,
+    )
+
+
+@mcp.tool()
+@_as_envelope
+def modify_order(
+    ticket: int,
+    price: float | None = None,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+    volume: float | None = None,
+    expiration: str | None = None,
+) -> dict:
+    """Modifies a pending order's price/SL/TP/volume/expiration. Dry-run by default; not kill-switch-gated (risk-neutral/reducing — see orders.py)."""
+    return orders.modify_order(
+        _get_connector(), _get_audit_log(), ticket,
+        price=price, stop_loss=stop_loss, take_profit=take_profit, volume=volume, expiration=expiration,
+    )
+
+
+@mcp.tool()
+@_as_envelope
+def cancel_order(ticket: int) -> dict:
+    """Cancels a pending order by ticket. Dry-run by default; not kill-switch-gated (pure risk reduction)."""
+    return orders.cancel_order(_get_connector(), _get_audit_log(), ticket)
+
+
+@mcp.tool()
+@_as_envelope
+def get_open_positions(
+    symbol: str | None = None,
+    magic_number: int | None = None,
+    comment: str | None = None,
+) -> list[dict]:
+    """Read-only: lists open positions, optionally filtered by symbol/magic_number/comment. No safety checks (not an execution tool)."""
+    return positions.get_open_positions(_get_connector(), symbol=symbol, magic_number=magic_number, comment=comment)
+
+
+@mcp.tool()
+@_as_envelope
+def modify_position(ticket: int, stop_loss: float | None = None, take_profit: float | None = None) -> dict:
+    """Modifies an open position's SL/TP. Dry-run by default; not kill-switch-gated (risk-neutral/reducing)."""
+    return positions.modify_position(_get_connector(), _get_audit_log(), ticket, stop_loss=stop_loss, take_profit=take_profit)
+
+
+@mcp.tool()
+@_as_envelope
+def close_position(ticket: int, volume: float | None = None) -> dict:
+    """Closes a position fully or partially (by volume). Dry-run by default; not kill-switch-gated (pure risk reduction)."""
+    return positions.close_position(_get_connector(), _get_audit_log(), ticket, volume=volume)
+
+
+@mcp.tool()
+@_as_envelope
+def close_all_positions(symbol: str | None = None, side: str | None = None, magic_number: int | None = None) -> dict:
+    """Bulk-closes open positions matching the given filters. Dry-run by default; not kill-switch-gated (pure risk reduction)."""
+    return positions.close_all_positions(_get_connector(), _get_audit_log(), symbol=symbol, side=side, magic_number=magic_number)
 
 
 def main() -> None:

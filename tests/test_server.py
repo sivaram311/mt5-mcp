@@ -27,6 +27,13 @@ from mt5_mcp.server import mcp
         "subscribe_live_data",
         "unsubscribe_live_data",
         "get_stream_log",
+        "place_order",
+        "modify_order",
+        "cancel_order",
+        "get_open_positions",
+        "modify_position",
+        "close_position",
+        "close_all_positions",
     ],
 )
 async def test_envelope_wrapped_tools_have_no_mismatched_output_schema(tool_name):
