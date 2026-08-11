@@ -110,6 +110,8 @@ That same http verification also caught a second, unrelated real bug: `get_histo
 
 **Acceptance:** Decision written under `docs/aidlc/`; no silent no-auth assumption for any future network-facing deploy — especially before ever binding to a non-loopback host.
 
+**Status update (2026-08-11): checkpoint hit for real, decision made — CSS integration still open.** The server itself still binds loopback only, but a reverse-proxied public hostname (`https://mt5-mcp-dev.delena.buzz`, nginx+Cloudflare, see `E:\MyAgent\workflow\ports\REGISTRY.md`'s `:3403` row) now makes it reachable off this machine, at the user's explicit request. Researched CSS first: it has no headless/M2M auth grant (only browser SSO or legacy password-login, and only a Spring Boot resource-server integration exists — MT5-MCP is Python). User's explicit decision: ship with **no auth gate now, full CSS integration later** — recorded as `waived-no-auth` in `workflow/css/CLIENT-REGISTRY.md` (a status distinct from `waived-public-read`, since this is not a read-only surface) and in `INCEPTION.md`'s auth section. `MT5_MCP_DRY_RUN` staying a server-side-only env var is the load-bearing mitigation (no real order reachable remotely) but does not make this resolved — Bolt 7 stays open until real CSS auth (or an equivalent gate) is actually built. Code change required to make the public hostname work at all: FastMCP's DNS-rebinding protection 421s any non-loopback Host header by default — added `MT5_MCP_PUBLIC_HOSTNAMES` env var + explicit `transport_security` settings in `server.py`.
+
 ---
 
 ## Explicitly deferred (not a Bolt yet)

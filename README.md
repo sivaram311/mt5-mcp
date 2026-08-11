@@ -51,6 +51,18 @@ claude mcp add --transport http mt5-mcp http://127.0.0.1:3403/mcp
 
 The server must already be running (`mt5-mcp` in a terminal) before the client connects — this project doesn't yet register itself as a background/managed process.
 
+## Public access (client on a different machine)
+
+A DEV instance of this server is reverse-proxied at **`https://mt5-mcp-dev.delena.buzz`** (nginx + Cloudflare, port `3403` on this host) so a client on another machine can connect without a VPN/SSH tunnel:
+
+```
+claude mcp add --transport http mt5-mcp https://mt5-mcp-dev.delena.buzz/mcp
+```
+
+**⚠️ No authentication gate today — explicit, documented decision, not an oversight.** Anyone with the URL can call every read-only tool and every execution tool. What they *cannot* do: place a real order — `MT5_MCP_DRY_RUN` is a server-side env var on this host, not something a remote caller can flip, so execution tools always return simulated responses unless this host's own `.env` has been explicitly set to `false`. What they *can* do: read real market data, read real open-position state (tickets/volumes/P&L), and get realistic simulated fills built from real prices. Full CSS integration is planned but not built — see `docs/aidlc/INCEPTION.md`'s "Auth / security note" and `E:\MyAgent\workflow\css\CLIENT-REGISTRY.md`'s `mt5-mcp` row (status `waived-no-auth`) for the reasoning and current status. Treat this URL accordingly until that changes.
+
+If you run your own reverse proxy in front of this server, add its hostname to `MT5_MCP_PUBLIC_HOSTNAMES` (comma-separated) — FastMCP's built-in DNS-rebinding protection otherwise rejects any Host header besides `127.0.0.1`/`localhost`/`::1` with a `421`.
+
 ## Tools
 
 All tools return the standard envelope: `{success, error_code, error_message, retryable, request_id, data}`.
@@ -96,6 +108,7 @@ Not implemented: `stop_limit`/`trailing_stop` order types, `get_order_history`/`
 | `MT5_MCP_TRANSPORT` | `streamable-http` | `stdio` \| `sse` \| `streamable-http` — see the stdio warning above |
 | `MT5_MCP_HTTP_HOST` | `127.0.0.1` | Bind host for http/sse transports |
 | `MT5_MCP_HTTP_PORT` | `3403` | Bind port (reserved in the port registry) |
+| `MT5_MCP_PUBLIC_HOSTNAMES` | (none) | Comma-separated extra Host headers to accept from a reverse proxy — required for any public hostname to work, see "Public access" above |
 | `MT5_MCP_DRY_RUN` | `true` | Must be exactly `false` to allow real order execution; anything else (including unset/typo) stays dry-run |
 | `MT5_MCP_KILL_SWITCH_PATH` | `<repo root>\MT5_MCP_KILL_SWITCH` | If this file exists, `place_order` is blocked |
 | `MT5_MCP_MAX_LOT_SIZE` | `0.10` | Max volume per `place_order` call |

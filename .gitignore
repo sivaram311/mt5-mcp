@@ -16,3 +16,7 @@ dist/
 
 # Bolt 5 kill-switch file (never meant to be committed — its presence is the signal)
 MT5_MCP_KILL_SWITCH
+
+# Local server stdout/stderr redirection when run ad-hoc in the background
+*.out.log
+*.err.log

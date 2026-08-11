@@ -120,6 +120,14 @@ This machine's standing rule is centralized auth via the Centralized Security Sy
 - **Not yet decided:** whether binding to loopback-only is itself sufficient to keep treating this as within the original deferral's spirit, or whether Bolt 7's checkpoint condition ("any network-facing transport ships") should be read literally — streamable-http is a network protocol even when loopback-restricted, and nothing currently stops a future change from binding `0.0.0.0` instead of `127.0.0.1` without this section being revisited again.
 - **Explicit next step, not resolved here:** before MT5-MCP ever binds to a non-loopback host, or before Bolt 7 (order/position tools' network-facing use) is treated as done, this section needs a real decision — CSS integration or a fresh documented waiver scoped to "loopback-only, streamable-http" specifically. Not done as part of this transport-fix pass; out of scope per the instruction not to start new feature work.
 
+### 2026-08-11 update — checkpoint hit, decision made (no-auth waiver, temporary)
+
+The server itself still binds loopback only (`127.0.0.1:3403`), but it is now reachable from other machines via a reverse-proxied public hostname, `https://mt5-mcp-dev.delena.buzz` (nginx → Cloudflare DNS, see `E:\MyAgent\workflow\ports\REGISTRY.md`'s `:3403` row for the full setup). This is exactly the condition this section said would void the deferral.
+
+Researched first: CSS (`E:\MyAgent\workflow\css\`) has no headless/machine-to-machine auth grant — only browser-redirect SSO (PKCE) or a legacy username/password login endpoint, and the only ready-made resource-server integration is a Spring Boot starter. Adopting CSS today for a Python, non-interactive tool server would mean either misusing the password-login endpoint with a stored service credential, or hand-building a JWT/JWKS validator from scratch — real, non-trivial work. There's also no Cloudflare Access precedent on this machine to borrow instead.
+
+**Decision (explicit, user-directed, 2026-08-11):** ship with **no auth gate for now**; full CSS integration is planned for later, not abandoned. Recorded in `workflow/css/CLIENT-REGISTRY.md` as `waived-no-auth` (a status distinct from the existing `waived-public-read` apps, because this is not a read-only surface). Bolt 5's dry-run architecture is the load-bearing mitigation, not a substitute for the decision: `MT5_MCP_DRY_RUN` is a server-side env var, so an unauthenticated remote caller cannot flip it and cannot place a real order through this endpoint. What an unauthenticated caller *can* do today: read real market data, read real open-position state (tickets/volumes/P&L), and receive realistic simulated fills. That is the accepted, explicitly-chosen risk until CSS lands — not an oversight.
+
 ---
 
 ## Secrets handling

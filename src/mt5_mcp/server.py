@@ -26,6 +26,7 @@ from typing import Any, Callable
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from mt5_mcp import __version__
 from mt5_mcp import market_data
@@ -56,7 +57,24 @@ SUPPORTED_TRANSPORTS = ("stdio", "sse", "streamable-http")
 HTTP_HOST = os.getenv("MT5_MCP_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.getenv("MT5_MCP_HTTP_PORT", "3403"))
 
-mcp = FastMCP(name="mt5-mcp", host=HTTP_HOST, port=HTTP_PORT)
+# FastMCP's DNS-rebinding protection rejects any Host header other than
+# 127.0.0.1/localhost/::1 by default (see transport_security.py). The
+# server itself still only binds loopback — a reverse proxy (nginx) forwards
+# the client's original Host header from a public hostname, so that
+# hostname must be added here explicitly or every proxied request gets a
+# 421. Comma-separated, e.g. MT5_MCP_PUBLIC_HOSTNAMES=mt5-mcp-dev.delena.buzz
+_extra_hostnames = [h.strip() for h in os.getenv("MT5_MCP_PUBLIC_HOSTNAMES", "").split(",") if h.strip()]
+_allowed_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"] + [h for hn in _extra_hostnames for h in (hn, f"{hn}:*")]
+_allowed_origins = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"] + [
+    f"https://{hn}" for hn in _extra_hostnames
+]
+_transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=_allowed_hosts,
+    allowed_origins=_allowed_origins,
+)
+
+mcp = FastMCP(name="mt5-mcp", host=HTTP_HOST, port=HTTP_PORT, transport_security=_transport_security)
 
 # Stream log DB: repo-root-anchored for the same reason as .env above —
 # an MCP client can spawn this server from an arbitrary CWD. Gitignored
