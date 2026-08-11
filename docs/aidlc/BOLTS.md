@@ -8,9 +8,13 @@ Evidence expectations: unit tests (mocked `MetaTrader5` module) for all logic; l
 
 ## Bolt 1 — Project skeleton, MCP transport, response envelope
 
+**Status: DONE (2026-08-11).**
+
 **Goal:** `src/mt5_mcp/` package, `pyproject.toml`, `.gitignore`, `.env.example`; an MCP server (stdio transport, official `mcp` Python SDK) that starts, lists a placeholder tool, and returns the standard response envelope (`success`, `error_code`, `error_message`, `retryable`, `request_id` — `SPEC.md` §8) — no MT5 connection yet.
 
-**Acceptance:** `pip install -e .` succeeds; server starts and responds to a `tools/list` MCP call; every tool response (including the placeholder) follows the envelope shape; `.env` gitignored; no secrets in tree.
+**Acceptance: met.** `pip install -e ".[dev]"` succeeds; `mt5_mcp/envelope.py` implements the envelope (`ok()`/`err()`); `mt5_mcp/server.py` registers a `ping` tool via `FastMCP` (stdio transport) returning the envelope as JSON; `tests/test_envelope.py` (5 unit tests) + `tests/test_server.py` (1 integration test that spawns the real server as a subprocess via the official `mcp` `ClientSession`/`stdio_client`, calls `tools/list` and `tools/call('ping')`, and asserts the returned JSON matches the envelope shape) — 6/6 pass. `.env` gitignored, `.env.example` has no secrets, no credentials anywhere in the tree.
+
+**Implementation note:** pinned `mcp>=1.29.0,<2.0.0` rather than the just-released `mcp==2.0.0` — 2.0.0 renamed `FastMCP`→`MCPServer` and restructured the server module (`mcp.server.fastmcp`→`mcp.server.mcpserver`) with an API not yet well-documented anywhere; 1.29.0's `FastMCP` is the stable, well-established surface. Revisit the 2.0.0 upgrade as its own future Bolt once its API is better understood, not as a side effect of Bolt 1.
 
 ---
 

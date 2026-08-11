@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mt5-mcp"
+version = "0.1.0"
+description = "MCP server exposing MetaTrader 5 market data, streaming, and order/position lifecycle tools"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.29.0,<2.0.0",
+    "python-dotenv>=1.0.0",
+    "MetaTrader5>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+mt5-mcp = "mt5_mcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
