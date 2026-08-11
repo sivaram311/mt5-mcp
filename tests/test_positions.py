@@ -57,6 +57,7 @@ class _FakeMT5:
         self.positions: list[_FakePosition] = []
         self.send_retcode = self.TRADE_RETCODE_DONE
         self.order_send_calls: list[dict] = []
+        self.raise_on_send = False
 
     def initialize(self, **kwargs):
         return True
@@ -83,6 +84,8 @@ class _FakeMT5:
 
     def order_send(self, request):
         self.order_send_calls.append(request)
+        if self.raise_on_send:
+            raise ConnectionError("simulated IPC disconnect mid-send")
         return _FakeSendResult(retcode=self.send_retcode)
 
 
@@ -268,3 +271,61 @@ def test_every_position_action_is_audited(connector, audit):
     actions = {r["action"] for r in rows}
     assert actions == {"modify_position", "close_position"}
     assert all(r["success"] for r in rows)
+
+
+# --- audit log must capture EVERY attempt, including unexpected exceptions
+# — regression tests for a real gap an independent review caught in the
+# first version of this Bolt ---
+
+
+def test_modify_position_unexpected_exception_is_still_audited(connector, audit, monkeypatch):
+    monkeypatch.setenv("MT5_MCP_DRY_RUN", "false")
+    connector.raw.positions = [_FakePosition(ticket=1)]
+    connector.raw.raise_on_send = True
+
+    with pytest.raises(ConnectionError):
+        modify_position(connector, audit, ticket=1, stop_loss=4340)
+
+    rows = audit.query(action="modify_position")
+    assert len(rows) == 1
+    assert rows[0]["success"] is False
+    assert rows[0]["error_code"] == "internal_error"
+
+
+def test_close_position_unexpected_exception_is_still_audited(connector, audit, monkeypatch):
+    monkeypatch.setenv("MT5_MCP_DRY_RUN", "false")
+    connector.raw.positions = [_FakePosition(ticket=1)]
+    connector.raw.raise_on_send = True
+
+    with pytest.raises(ConnectionError):
+        close_position(connector, audit, ticket=1)
+
+    rows = audit.query(action="close_position")
+    assert len(rows) == 1
+    assert rows[0]["success"] is False
+    assert rows[0]["error_code"] == "internal_error"
+
+
+def test_close_all_positions_unexpected_exception_does_not_abort_whole_batch(connector, audit, monkeypatch):
+    """One position's close_position() raising something unexpected must
+    not discard results already collected for other positions — it should
+    show up as a per-ticket failure, same as a PositionError."""
+    monkeypatch.setenv("MT5_MCP_DRY_RUN", "false")
+    connector.raw.positions = [_FakePosition(ticket=1), _FakePosition(ticket=2)]
+
+    original_positions_get = connector.raw.positions_get
+
+    def flaky_positions_get(symbol=None, ticket=None):
+        if ticket == 2:
+            raise RuntimeError("simulated transient MT5 error")
+        return original_positions_get(symbol=symbol, ticket=ticket)
+
+    connector.raw.positions_get = flaky_positions_get
+
+    result = close_all_positions(connector, audit)
+
+    assert result["requested_count"] == 2
+    assert [c["ticket"] for c in result["closed"]] == [1]
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["ticket"] == 2
+    assert result["failed"][0]["error_code"] == "internal_error"

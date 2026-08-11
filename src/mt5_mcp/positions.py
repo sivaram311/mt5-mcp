@@ -109,6 +109,11 @@ def modify_position(
     except PositionError as exc:
         audit.record(_now_iso(), "modify_position", None, dry_run, request, success=False, error_code=exc.error_code)
         raise
+    except Exception:
+        # See orders.py's equivalent catch-all: an execution attempt that
+        # raises something unexpected must still be audited.
+        audit.record(_now_iso(), "modify_position", None, dry_run, request, success=False, error_code="internal_error")
+        raise
 
 
 def close_position(
@@ -171,6 +176,9 @@ def close_position(
     except PositionError as exc:
         audit.record(_now_iso(), "close_position", None, dry_run, request, success=False, error_code=exc.error_code)
         raise
+    except Exception:
+        audit.record(_now_iso(), "close_position", None, dry_run, request, success=False, error_code="internal_error")
+        raise
 
 
 def close_all_positions(
@@ -191,5 +199,12 @@ def close_all_positions(
             closed.append(close_position(connector, audit, p["ticket"]))
         except PositionError as exc:
             failed.append({"ticket": p["ticket"], "error_code": exc.error_code, "error_message": str(exc)})
+        except Exception as exc:
+            # An unexpected exception from one position's close_position()
+            # (already individually audited by close_position's own
+            # catch-all) must not abort the whole batch and discard results
+            # already collected for other positions — record it as a
+            # per-ticket failure and keep going, same as a PositionError.
+            failed.append({"ticket": p["ticket"], "error_code": "internal_error", "error_message": str(exc)})
 
     return {"closed": closed, "failed": failed, "requested_count": len(positions)}

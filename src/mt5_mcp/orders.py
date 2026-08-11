@@ -124,6 +124,15 @@ def place_order(
     except OrderError as exc:
         fail(exc.error_code)
         raise
+    except Exception as exc:
+        # Anything unexpected (order_send() itself raising on a network
+        # blip/terminal disconnect, an unanticipated attribute error, ...)
+        # must still be audited — an execution attempt that isn't in the
+        # audit log is exactly the failure mode this log exists to prevent.
+        # Re-raised unchanged; server.py's envelope layer maps it to a
+        # generic internal_error for the caller.
+        fail("internal_error")
+        raise
 
 
 def _simulate_place_order(
@@ -258,11 +267,17 @@ def modify_order(
             raise OrderError("order_not_found", f"No pending order with ticket {ticket}")
         existing = orders[0]
 
-        if volume is not None:
-            # Only the lot-size check applies here — kill-switch deliberately
-            # does not gate modify_order (see module docstring), and
-            # open-position-count isn't relevant to modifying an existing
-            # pending order.
+        if volume is not None and volume > existing.volume_current:
+            # Lot-size check applies only when volume is actually being
+            # increased — that's the only direction that increases exposure.
+            # A decrease must never be blocked by this check, even if the
+            # requested (lower) volume still exceeds today's configured
+            # limit (e.g. a legacy order placed under a since-lowered cap):
+            # blocking a risk-*reducing* modify would contradict the same
+            # reasoning that keeps the kill-switch off this function.
+            # Kill-switch itself deliberately does not gate modify_order at
+            # all (see module docstring); open-position-count isn't
+            # relevant to modifying an existing pending order.
             try:
                 safety.check_lot_size(volume)
             except safety.SafetyError as exc:
@@ -297,6 +312,15 @@ def modify_order(
     except OrderError as exc:
         fail(exc.error_code)
         raise
+    except Exception as exc:
+        # Anything unexpected (order_send() itself raising on a network
+        # blip/terminal disconnect, an unanticipated attribute error, ...)
+        # must still be audited — an execution attempt that isn't in the
+        # audit log is exactly the failure mode this log exists to prevent.
+        # Re-raised unchanged; server.py's envelope layer maps it to a
+        # generic internal_error for the caller.
+        fail("internal_error")
+        raise
 
 
 def cancel_order(connector: MT5Connector, audit: AuditLogStore, ticket: int) -> dict[str, Any]:
@@ -321,4 +345,13 @@ def cancel_order(connector: MT5Connector, audit: AuditLogStore, ticket: int) -> 
         return ok(result)
     except OrderError as exc:
         fail(exc.error_code)
+        raise
+    except Exception as exc:
+        # Anything unexpected (order_send() itself raising on a network
+        # blip/terminal disconnect, an unanticipated attribute error, ...)
+        # must still be audited — an execution attempt that isn't in the
+        # audit log is exactly the failure mode this log exists to prevent.
+        # Re-raised unchanged; server.py's envelope layer maps it to a
+        # generic internal_error for the caller.
+        fail("internal_error")
         raise

@@ -65,6 +65,7 @@ class _FakeMT5:
         self.symbol_select_result = True
         self.send_retcode = self.TRADE_RETCODE_DONE
         self.order_send_calls: list[dict] = []
+        self.raise_on_send = False
 
     def initialize(self, **kwargs):
         return True
@@ -95,6 +96,8 @@ class _FakeMT5:
 
     def order_send(self, request):
         self.order_send_calls.append(request)
+        if self.raise_on_send:
+            raise ConnectionError("simulated IPC disconnect mid-send")
         return _FakeSendResult(retcode=self.send_retcode)
 
 
@@ -255,6 +258,21 @@ def test_modify_order_volume_increase_still_checked_against_lot_limit(connector,
     assert excinfo.value.error_code == "lot_size_exceeds_limit"
 
 
+def test_modify_order_volume_decrease_never_blocked_by_lot_limit(connector, audit, monkeypatch):
+    """A volume *decrease* must never be blocked by the lot-size limit,
+    even if the requested (lower) volume still exceeds today's configured
+    max — e.g. a legacy order placed under a since-lowered cap. Blocking
+    a risk-reducing modify would contradict the same reasoning that keeps
+    the kill-switch off this function."""
+    monkeypatch.setenv("MT5_MCP_MAX_LOT_SIZE", "0.05")
+    connector.raw.pending_orders[42] = _FakeOrder(ticket=42, volume_current=0.5)
+
+    result = modify_order(connector, audit, ticket=42, volume=0.2)  # 0.2 < 0.5, a decrease, but still > 0.05 limit
+
+    assert result["simulated"] is True
+    assert result["volume"] == 0.2
+
+
 def test_cancel_order_not_found_raises(connector, audit):
     with pytest.raises(OrderError) as excinfo:
         cancel_order(connector, audit, ticket=999)
@@ -289,3 +307,49 @@ def test_cancel_order_real_execution(connector, audit, monkeypatch):
     assert result["simulated"] is False
     assert result["status"] == "cancelled"
     assert connector.raw.order_send_calls[0]["action"] == "REMOVE"
+
+
+# --- audit log must capture EVERY attempt, including unexpected exceptions
+# (not just the domain-typed OrderError/SafetyError paths) — regression
+# tests for a real gap an independent review caught in the first version ---
+
+
+def test_place_order_unexpected_exception_is_still_audited(connector, audit, monkeypatch):
+    monkeypatch.setenv("MT5_MCP_DRY_RUN", "false")
+    connector.raw.raise_on_send = True
+
+    with pytest.raises(ConnectionError):
+        place_order(connector, audit, "XAUUSD", "market", "buy", 0.01)
+
+    rows = audit.query(action="place_order")
+    assert len(rows) == 1
+    assert rows[0]["success"] is False
+    assert rows[0]["error_code"] == "internal_error"
+
+
+def test_modify_order_unexpected_exception_is_still_audited(connector, audit, monkeypatch):
+    monkeypatch.setenv("MT5_MCP_DRY_RUN", "false")
+    connector.raw.pending_orders[42] = _FakeOrder(ticket=42)
+    connector.raw.raise_on_send = True
+
+    with pytest.raises(ConnectionError):
+        modify_order(connector, audit, ticket=42, price=4350)
+
+    rows = audit.query(action="modify_order")
+    assert len(rows) == 1
+    assert rows[0]["success"] is False
+    assert rows[0]["error_code"] == "internal_error"
+
+
+def test_cancel_order_unexpected_exception_is_still_audited(connector, audit, monkeypatch):
+    monkeypatch.setenv("MT5_MCP_DRY_RUN", "false")
+    connector.raw.pending_orders[42] = _FakeOrder(ticket=42)
+    connector.raw.raise_on_send = True
+
+    with pytest.raises(ConnectionError):
+        cancel_order(connector, audit, ticket=42)
+
+    rows = audit.query(action="cancel_order")
+    assert len(rows) == 1
+    assert rows[0]["success"] is False
+    assert rows[0]["error_code"] == "internal_error"
