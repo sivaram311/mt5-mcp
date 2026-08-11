@@ -1,6 +1,8 @@
 # Findings: MT5-MCP stdio server hangs on any real MetaTrader5 call
 
-**Status:** RESOLVED via transport switch (streamable-http). Root cause of the hang itself was never identified (see "Not yet tried" below — none of it was needed once http worked), but the workaround is verified reliable (3/3 clean runs) and a second, unrelated bug it uncovered is also fixed. Still not committed to `master` — everything below and the code changes in `src/mt5_mcp/server.py` remain in the working tree for review.
+> **⚠ Do not use `stdio` transport for any tool that calls `MetaTrader5`.** The hang's root cause was never identified despite extensive isolation (see "What was ruled out" below). Use `streamable-http` (the default since Bolt 3) instead. This restriction stays in effect until someone actually isolates and fixes the stdio issue — it is not resolved just because a workaround exists.
+
+**Status:** WORKED AROUND via transport switch (streamable-http is now the default and the only transport verified reliable for MT5 calls). Root cause of the stdio hang itself was **never identified** (see "Not yet tried" below — none of it was needed once http worked). The workaround is verified reliable (3/3 clean runs) and a second, unrelated schema bug it uncovered is also fixed. Committed to `master` (commit `66c9fe3`, "Bolt 3: market data tools, default transport switched to streamable-http").
 
 **Date:** 2026-08-11, during Bolt 3 (`get_historical_ohlcv`/`get_symbol_info`).
 
@@ -70,4 +72,5 @@ result
 - **stdio's root cause is still unknown.** If a future MCP client absolutely requires stdio (some don't support streamable-http yet), this will need real isolation work — start from `diagnostics/bare_mt5_client.py` and the two untried directions above (read `mcp/server/stdio.py`'s own read loop; check upstream issue trackers).
 - **`diagnostics/live_smoke_http.py`'s dual-session-hang wrinkle** (see above) was routed around, not explained. If a real MCP client opens more than one session against this server in quick succession, watch for this.
 - **Every future Bolt's tools must go through `_as_envelope`** (or independently set a correct `__signature__`/return annotation) to avoid reintroducing the schema bug — the regression test only covers the three tools that exist today.
-- Nothing here has been committed. `src/mt5_mcp/server.py`, `tests/test_connector.py`, `tests/test_server.py`, `diagnostics/live_smoke_http.py`, the port registry rows (`E:\MyAgent\workflow\ports\REGISTRY.md`/`.json`, port `3403`), and this file are all new/modified in the working tree, pending review.
+- Code, tests, and this file are committed (`master` @ `66c9fe3`). The port registry rows (`E:\MyAgent\workflow\ports\REGISTRY.md`/`.json`, port `3403`) live in a **separate repo** (`E:\MyAgent`) and were committed there independently, not part of this repo's history.
+- `docs/aidlc/INCEPTION.md`'s transport/auth/deploy-topology sections have been updated to match reality (2026-08-11) — the auth deferral's own stated trigger condition (network-facing transport) fired when streamable-http became default, and that section is now flagged as an open, unresolved decision rather than silently left stale.

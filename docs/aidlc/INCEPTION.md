@@ -18,7 +18,7 @@ It is a **single-operator local tool**, run against the MT5 terminal already ins
 
 `E:\MyWorkspace\mt5-dev` is a separate, existing project: a file-based bridge (`ChartDrawBridge.mq5` + a Python command writer) that lets a script push chart-drawing commands into a running MT5 terminal via the Common Files folder. It does not use the `MetaTrader5` Python package, has no MCP protocol surface, and does no market-data or order/position work.
 
-**Decision:** MT5-MCP is a new, separate project. It does not replace or wrap `mt5-dev` — different protocol (proper MCP over stdio vs. a file-poll bridge), different capability (data + orders vs. chart annotation). Both can coexist.
+**Decision:** MT5-MCP is a new, separate project. It does not replace or wrap `mt5-dev` — different protocol (proper MCP, over streamable-http as of Bolt 3 — see below — vs. a file-poll bridge), different capability (data + orders vs. chart annotation). Both can coexist.
 
 ---
 
@@ -29,12 +29,11 @@ It is a **single-operator local tool**, run against the MT5 terminal already ins
 - All tool categories from `SPEC.md` §4: market data (`get_historical_ohlcv`, `get_symbol_info`), live streaming + durable log (`subscribe_live_data`, `unsubscribe_live_data`, `get_stream_log`), order placement (`place_order`, `modify_order`, `cancel_order`), position management (`get_open_positions`, `modify_position`, `close_position`, `close_all_positions`), history/audit (`get_order_history`, `get_deal_history`, `get_position_history`)
 - **Decision (execution sequencing):** order/position tools ship in the **same** first Construction pass as the read-only tools — not deferred to a later milestone. The tradeoff for shipping them together is that every execution tool defaults to a **dry-run/paper mode** (see "Safety layer" below) that must be explicitly disabled to touch a real account. The safety layer is not a follow-up Bolt; it ships alongside the feature.
 - MetaTrader 5 as the only backend connector for this project. The spec is written backend-agnostic (§13 calls out pluggability to cTrader / REST brokers) — that pluggability is **not** built now; a single hard-wired `MetaTrader5`-package connector is the Inception decision. Revisit only if a second backend is actually needed.
-- stdio MCP transport only (local process, spawned by the client) — no network listener, no port binding.
+- **Superseded during Bolt 3 (2026-08-11):** stdio was the original Inception transport decision. A real MCP client calling any `MetaTrader5`-touching tool over stdio was found to hang indefinitely (root cause not fully identified despite extensive isolation — see `diagnostics/FINDINGS.md`). **`streamable-http` is now the default and recommended transport** (`MT5_MCP_TRANSPORT` env var; bound to `127.0.0.1:3403`, reserved in `E:\MyAgent\workflow\ports\REGISTRY.md`, loopback-only). `stdio` remains available for whichever client needs it but is **not currently known to work reliably for any tool that calls MetaTrader5** — don't use it for that until someone isolates the hang further.
 
 **Explicitly out of scope for this pass**
 
 - Any second backend connector (cTrader, generic REST brokers)
-- Network-facing transport (HTTP/SSE/Streamable HTTP) — stdio only for now; see the auth checkpoint below for what has to happen first if this changes
 - CSS auth integration (deferred, see "Auth / security" below)
 - `SPEC.md` §10 extensibility items (economic calendar, multi-account, portfolio-level risk, custom indicator filters, webhooks) — explicitly future work, not this pass
 - Live (non-demo) trading — see "Safety layer": dry-run is the default and disabling it against a live account is a separate, explicit, human-made decision, not a side effect of finishing Construction
@@ -46,12 +45,12 @@ It is a **single-operator local tool**, run against the MT5 terminal already ins
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Language / runtime | Python 3.11+ | The `MetaTrader5` Python package is already installed on this machine and independently verified (this session) to pull live XAUUSD ticks against the real terminal; `mt5-dev` already established Python as this machine's MT5-integration language; the official MCP Python SDK covers the server side. |
-| MCP SDK | Official `mcp` Python SDK (stdio server) | Standard, avoids hand-rolling the protocol. |
+| MCP SDK | Official `mcp` Python SDK (`FastMCP`, streamable-http server) | Standard, avoids hand-rolling the protocol. |
 | Packaging | `pyproject.toml`, standard `pip`/`venv` | Matches `cineforge` and `mt5-dev` convention on this machine. |
 | Package name | `mt5_mcp` | Fixed project identity. |
 | Backend connector | `MetaTrader5` package only (hard-wired, not pluggable yet) | See scope decision above. |
 | Stream log store | Local SQLite file (one DB, tables keyed by symbol+date) | Meets `SPEC.md` §7's "durable, time-range queryable, keyed by symbol+date" requirement without standing up Postgres/schema-per-env for a single-operator local tool. Revisit only if multi-process concurrent write access is ever needed. |
-| Transport | MCP over stdio | Local single-operator tool; no port to reserve. Revisit at the Bolt 7 auth checkpoint if network transport is ever wanted. |
+| Transport | MCP over `streamable-http` (default), `stdio` available but not currently reliable for MT5-touching tools | Changed from the original stdio-only decision during Bolt 3 — stdio hangs indefinitely on any real `MetaTrader5` call, root cause not fully identified. Bound to `127.0.0.1:3403` (loopback only, reserved in the port registry). This is now a network-facing transport, even if currently loopback-restricted — see "Auth / security note" below, which this changes. |
 | Layout | `src/mt5_mcp/`, `tests/`, `docs/` (`docs/aidlc/` for AI-DLC), root `README.md`, `pyproject.toml`, `.gitignore`, `.env.example` | Machine convention (matches `cineforge`). |
 
 This decision is **fixed** — do not re-decide during Construction.
@@ -61,29 +60,29 @@ This decision is **fixed** — do not re-decide during Construction.
 ## Architecture sketch
 
 ```
-┌──────────────┐   MCP over stdio    ┌───────────────────────┐
-│  MCP Client  │ ◄─────────────────► │   MT5-MCP server       │
-│ (Claude Code/│   (local process)   │   (Python, mt5_mcp)    │
-│  Desktop/    │                     │                        │
-│  Cursor/etc) │                     │  tool dispatch +       │
-└──────────────┘                     │  response envelope     │
-                                      │  (success/error_code/  │
-                                      │   retryable/request_id)│
-                                      └───────────┬────────────┘
-                                                  │  MetaTrader5
-                                                  │  Python package
-                                                  ▼
-                                      ┌───────────────────────┐
-                                      │  MT5 terminal          │
-                                      │  terminal64.exe        │
-                                      │  E:\ProgramFiles\MT5   │
-                                      └───────────┬────────────┘
-                                                  │
-                                                  ▼
-                                      ┌───────────────────────┐
-                                      │  Broker                │
-                                      │  (OctaFX-Demo today)   │
-                                      └───────────────────────┘
+┌──────────────┐  MCP over streamable-http   ┌───────────────────────┐
+│  MCP Client  │ ◄─────────────────────────► │   MT5-MCP server       │
+│ (Claude Code/│  (127.0.0.1:3403, default;  │   (Python, mt5_mcp)    │
+│  Desktop/    │   stdio available, not      │                        │
+│  Cursor/etc) │   reliable for MT5 calls)   │  tool dispatch +       │
+└──────────────┘                             │  response envelope     │
+                                              │  (success/error_code/  │
+                                              │   retryable/request_id)│
+                                              └───────────┬────────────┘
+                                                          │  MetaTrader5
+                                                          │  Python package
+                                                          ▼
+                                              ┌───────────────────────┐
+                                              │  MT5 terminal          │
+                                              │  terminal64.exe        │
+                                              │  E:\ProgramFiles\MT5   │
+                                              └───────────┬────────────┘
+                                                          │
+                                                          ▼
+                                              ┌───────────────────────┐
+                                              │  Broker                │
+                                              │  (OctaFX-Demo today)   │
+                                              └───────────────────────┘
 
 Side channel (Bolt 4): subscribe_live_data writes every tick/bar to a local
 SQLite stream log (keyed by symbol + date). get_stream_log reads it back —
@@ -109,13 +108,17 @@ Because order/position tools ship in the first Construction pass, the following 
 
 ---
 
-## Auth / security note (open decision — deferred by design)
+## Auth / security note (open decision — deferred by design, but see the 2026-08-11 update below)
 
-This machine's standing rule is centralized auth via the Centralized Security System (CSS) for anything beyond a public no-login static surface. MT5-MCP is not that — but per the `cineforge` precedent, a **single-operator local tool speaking MCP over stdio has no network attack surface to protect with CSS yet**: the client spawning the server process already has whatever access the operator's machine account has.
+This machine's standing rule is centralized auth via the Centralized Security System (CSS) for anything beyond a public no-login static surface. The original reasoning here was the `cineforge` precedent: a single-operator local tool speaking MCP over stdio has no network attack surface to protect with CSS yet — the client spawning the server process already has whatever access the operator's machine account has.
 
-**Decision:** defer CSS integration, following the `cineforge` open-decision pattern — recorded here explicitly, not silently waived.
+**Decision (original, Inception):** defer CSS integration, following the `cineforge` open-decision pattern — recorded here explicitly, not silently waived.
 
-**This decision is void the moment MT5-MCP gains a network-facing transport** (HTTP/SSE/Streamable HTTP, or anything reachable off this machine). Bolt 7 is the checkpoint: before any such transport ships, this section must be revisited and either CSS gets integrated or a fresh documented waiver is written for the new surface.
+**This decision was written to be void the moment MT5-MCP gains a network-facing transport, with Bolt 7 as the named checkpoint. That happened during Bolt 3 (2026-08-11)** — the default transport is now `streamable-http`, not `stdio` (see the Tech stack table and `docs/aidlc/BOLTS.md` Bolt 3 for why: stdio hangs indefinitely on any real `MetaTrader5` call). This section has **not** been fully re-resolved — flagging that explicitly rather than silently treating the old deferral as still valid:
+
+- **Mitigating factor, not a resolution:** the server is currently bound to `127.0.0.1:3403` only — loopback, not reachable off this machine. The trust boundary today is arguably still "same machine, same operator," similar to stdio.
+- **Not yet decided:** whether binding to loopback-only is itself sufficient to keep treating this as within the original deferral's spirit, or whether Bolt 7's checkpoint condition ("any network-facing transport ships") should be read literally — streamable-http is a network protocol even when loopback-restricted, and nothing currently stops a future change from binding `0.0.0.0` instead of `127.0.0.1` without this section being revisited again.
+- **Explicit next step, not resolved here:** before MT5-MCP ever binds to a non-loopback host, or before Bolt 7 (order/position tools' network-facing use) is treated as done, this section needs a real decision — CSS integration or a fresh documented waiver scoped to "loopback-only, streamable-http" specifically. Not done as part of this transport-fix pass; out of scope per the instruction not to start new feature work.
 
 ---
 
@@ -132,12 +135,12 @@ This machine's standing rule is centralized auth via the Centralized Security Sy
 
 | Role | Drive | Ports | Status |
 |------|-------|-------|--------|
-| DEV | E: | None — stdio transport, no listener | N/A for Inception |
-| PREPROD | F: | — | Not applicable while stdio-only |
-| PROD | G: | — | Not applicable while stdio-only |
+| DEV | E: | `:3403` (streamable-http, default transport as of Bolt 3; loopback `127.0.0.1` only) — reserved in `E:\MyAgent\workflow\ports\REGISTRY.md`; `stdio` also available, no port, not reliable for MT5 calls | Bound and verified locally during Bolt 3 testing; not a persistent/durable DEV service yet |
+| PREPROD | F: | — | Not reserved yet |
+| PROD | G: | — | Not reserved yet |
 | RELEASES | H: | — | N/A for Inception |
 
-Nothing is deployed to F: or G: during Inception; a local stdio MCP server has no promote-pipeline deploy step in the traditional sense (it's invoked by the client, not a long-running bound service) — this will need to be revisited if/when Bolt 7's network-transport decision changes the shape of "deploy."
+Nothing is deployed to F: or G: during Inception. `:3403` is currently only ever started ad hoc for local testing (e.g. `diagnostics/live_smoke_http.py`), not run as a standing DEV service — no durable-startup task exists. Revisit deploy shape (promote pipeline, durable process) once this moves past ad hoc local testing.
 
 ---
 
@@ -146,7 +149,8 @@ Nothing is deployed to F: or G: during Inception; a local stdio MCP server has n
 | Topic | Note |
 |-------|------|
 | Live trading risk | Dry-run default + kill-switch + risk limits are Bolt 5 acceptance criteria, not later hardening. See "Safety layer" above. |
-| Auth | Deferred by design (see above) — void once network-facing transport exists. |
+| Auth | Deferred by design originally; that deferral's own stated trigger (network-facing transport) fired during Bolt 3 (streamable-http is now default). Not yet re-resolved — see "Auth / security note" above for the current (unresolved) state. |
+| stdio hang | Root cause not fully identified (extensive isolation ruled out env vars, `CREATE_NO_WINDOW`, thread offload, Windows Job Objects, Python 3.12 vs 3.14 — see `diagnostics/FINDINGS.md`). Do not use `stdio` for any tool that calls `MetaTrader5` until this is properly isolated and fixed. |
 | SQLite under concurrent access | Fine for a single local server process; would need a real decision (WAL mode tuning, or a move to Postgres per this machine's schema-per-env rule) if ever run multi-process. |
 | Demo vs live account | Current verified connection is `OctaFX-Demo`. Nothing in this charter authorizes pointing MT5-MCP at a live account — that's a distinct future decision, not implied by finishing Construction. |
 | MT5 Python package platform lock-in | The `MetaTrader5` package is Windows-only (wraps the native terminal's IPC) — fine here since this machine is Windows, but worth noting if this ever needs to run elsewhere. |

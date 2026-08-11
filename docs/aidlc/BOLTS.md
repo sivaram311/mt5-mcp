@@ -45,7 +45,7 @@ No MCP tool exposes this yet — `MT5Connector` is an internal module only, cons
 
 ## Bolt 3 — Market data tools
 
-**Status: DONE (2026-08-11), but changed the server's default transport along the way — see below. Not committed to `master` yet, pending review.**
+**Status: DONE (2026-08-11), but changed the server's default transport along the way — see below. Committed to `master` @ `66c9fe3`.**
 
 **Goal:** `get_historical_ohlcv` and `get_symbol_info` as real MCP tools (`SPEC.md` §4.1), wired through the Bolt 2 connector. All filter parameters from the spec (`from_date`/`to_date`, `from_bar`/`to_bar`, `limit`, `include_volume`, `include_spread`, `session_filter`, `price_type`, `only_completed_bars`) implemented or explicitly stubbed with a documented reason if MT5's API can't support one directly (e.g. `session_filter` may need to be computed client-side from UTC time, not a native MT5 filter).
 
@@ -55,7 +55,7 @@ No MCP tool exposes this yet — `MT5Connector` is an internal module only, cons
 
 That same http verification also caught a second, unrelated real bug: `get_historical_ohlcv`'s declared return type (`list[dict]`) didn't match what `_as_envelope` actually returns at runtime (a `dict` envelope) — invisible to the unit tests (which call the inner function directly, bypassing FastMCP's schema layer) but a hard failure through any real MCP client. Fixed in `server.py`'s `_as_envelope` (explicit `__signature__` override) with a regression test (`test_server.py::test_envelope_wrapped_tools_have_no_mismatched_output_schema`). Full writeup: `diagnostics/FINDINGS.md`.
 
-**INCEPTION.md's transport decision needs a follow-up edit** (deploy topology / tech stack tables still say "stdio only, no port") — not done yet as part of this Bolt, flagged for whoever reviews this before it's committed.
+**INCEPTION.md updated (2026-08-11, separate pass):** transport, deploy topology, and tech stack tables now reflect streamable-http as default. The auth section's own stated trigger condition ("void the moment MT5-MCP gains a network-facing transport") fired — flagged there as an explicitly **unresolved** open decision (not silently treated as still-deferred), pending Bolt 7 below.
 
 ---
 
@@ -90,9 +90,11 @@ That same http verification also caught a second, unrelated real bug: `get_histo
 
 ## Bolt 7 — Auth decision checkpoint (CSS or waiver)
 
-**Goal:** Before any network-facing transport (HTTP/SSE/Streamable HTTP) or multi-user surface, revisit `INCEPTION.md`'s deferred-auth decision and record either a CSS integration plan or a fresh explicit documented waiver for the new surface.
+**Now more relevant than originally scoped:** its trigger condition ("any network-facing transport ships") already fired during Bolt 3 — streamable-http is the default transport as of `66c9fe3`, not a hypothetical future change. Currently mitigated only by loopback-only binding (`127.0.0.1:3403`), which `INCEPTION.md`'s "Auth / security note" explicitly flags as a mitigating factor, not a resolution.
 
-**Acceptance:** Decision written under `docs/aidlc/`; no silent no-auth assumption for any future network-facing deploy. Not required to start Bolt 7 itself if MT5-MCP stays stdio-only indefinitely — this Bolt is a gate on *adding network transport*, not a deadline.
+**Goal:** Revisit `INCEPTION.md`'s deferred-auth decision and record either a CSS integration plan or a fresh explicit documented waiver scoped to "loopback-only, streamable-http."
+
+**Acceptance:** Decision written under `docs/aidlc/`; no silent no-auth assumption for any future network-facing deploy — especially before ever binding to a non-loopback host.
 
 ---
 
