@@ -18,7 +18,17 @@ from mt5_mcp.server import mcp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["ping", "get_historical_ohlcv", "get_symbol_info"])
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "ping",
+        "get_historical_ohlcv",
+        "get_symbol_info",
+        "subscribe_live_data",
+        "unsubscribe_live_data",
+        "get_stream_log",
+    ],
+)
 async def test_envelope_wrapped_tools_have_no_mismatched_output_schema(tool_name):
     """Regression test for a real bug found via diagnostics/live_smoke_http.py:
     _as_envelope always returns a dict envelope at runtime, but before the

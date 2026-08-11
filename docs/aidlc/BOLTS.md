@@ -61,9 +61,17 @@ That same http verification also caught a second, unrelated real bug: `get_histo
 
 ## Bolt 4 — Live streaming + durable stream log
 
+**Status: DONE (2026-08-11).**
+
 **Goal:** `subscribe_live_data`, `unsubscribe_live_data`, `get_stream_log` (`SPEC.md` §4.2, §7). Local SQLite stream-log store (per `INCEPTION.md` tech stack decision), keyed by symbol + date, time-range queryable. Multiple concurrent subscriptions supported.
 
-**Acceptance:** Unit tests cover subscribe/unsubscribe lifecycle and log write/query against a temp SQLite file (no real MT5 needed for the log-store tests); live smoke subscribes to XAUUSD ticks for a short window, confirms both the forwarded stream and the durable log contain matching entries, and confirms `get_stream_log` reconstructs the sequence after a simulated disconnect.
+**Design decision (documented, not silently assumed):** MT5's Python API has no push/callback mechanism — every read is a synchronous poll (confirmed while building this Bolt). SPEC.md §7's "forwarded in near real-time to the MCP client" is therefore realized as a background poll (`src/mt5_mcp/streaming.py`'s `SubscriptionManager`, ~1s interval, one daemon thread per subscription) writing into the durable log (`src/mt5_mcp/stream_log.py`, one SQLite table indexed on `(symbol, timestamp)`), not a true server-push channel — a client gets live data via `get_stream_log`, including catch-up after a disconnect, which *is* the mechanism SPEC.md §7 describes for reconnection, just also the only delivery path here. True MCP-level push (e.g. resource-subscription notifications) is a possible future enhancement, not built. `data_types` supports `tick` and `bar` (fixed M1 timeframe); `depth_of_market`/custom types are explicitly rejected with a documented reason (need MT5's separate `market_book_add`/`market_book_get` API).
+
+**Concurrency note:** this Bolt introduces the first real multi-thread MT5 access in this codebase (polling threads run alongside FastMCP's single request-handling thread). Calls made through `SubscriptionManager` are serialized via an internal lock; Bolt 3's `market_data.py` calls are **not** covered by that lock, since those still only ever run on the single request thread. Flagged as a risk to revisit if that assumption changes.
+
+**Acceptance: met.** `tests/test_stream_log.py` (8 tests): append/query round-trip, symbol/data_type/time-range filtering, ordering, limit, empty-result, reopening an existing DB file. `tests/test_streaming.py` (9 tests, real threads with a fake MT5 module — not mocked away, since threading lifecycle bugs are exactly what's worth testing for real): subscribe starts writing, unsubscribe stops new writes, unsubscribe-by-symbol stops all matching subscriptions, unknown-id unsubscribe is a no-op, missing-both-params raises, unsupported `data_type` raises, concurrent subscriptions to different symbols write independently, duplicate ticks aren't rewritten (dedup guard), and a transient poll error doesn't kill the subscription thread. 59/59 tests pass repo-wide.
+
+`scripts/live_smoke_bolt4.py` — documented, repeatable, not CI. Real run against `OctaFX-Demo` through the real MCP client over `streamable-http` (2 clean runs, 2026-08-11): `subscribe_live_data` on real XAUUSD ticks, 5 real entries logged over a 5s window, `get_stream_log` read them back, `unsubscribe_live_data` stopped the subscription, `get_stream_log` called again afterward returned the identical entries — confirms the log is stable and readable with no active subscription, the acceptance criterion's "reconstructs the sequence after a simulated disconnect."
 
 ---
 
